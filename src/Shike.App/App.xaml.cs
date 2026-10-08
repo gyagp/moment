@@ -12,6 +12,8 @@ public partial class App : Application
         var testIndex = Array.IndexOf(arguments, "--smoke-test");
         var startupOnly = false;
         if (testIndex < 0) { testIndex = Array.IndexOf(arguments, "--startup-test"); startupOnly = testIndex >= 0; }
+        var libraryOnly = false;
+        if (testIndex < 0) { testIndex = Array.IndexOf(arguments, "--library-test"); libraryOnly = testIndex >= 0; }
         if (testIndex < 0)
         {
             _window = new MainWindow();
@@ -22,11 +24,13 @@ public partial class App : Application
         Directory.CreateDirectory(output);
         try
         {
-            var main = new MainWindow();
+            var main = new MainWindow(new Shike.Core.CaptureLibrary(Path.Combine(output, "managed-images"), Path.Combine(output, "managed-videos")));
             _window = main;
             main.Activate();
-            if (startupOnly) await Task.Delay(500); else await main.RunSmokeTestAsync(output);
-            File.WriteAllText(Path.Combine(output, "result.txt"), startupOnly ? "PASS: packaged WinUI startup and resources.\n" : "PASS: WinUI launch; rectangle/fullscreen/freeform/window modes; cancellation; transparent PNG; occlusion-free HWND capture; automatic wheel scrolling/stitching/bottom detection/cancellation; MP4 pause/resume/finalize/frame decode.\n");
+            if (startupOnly) await Task.Delay(500);
+            else if (libraryOnly) await main.RunLibraryTestAsync(output);
+            else await main.RunSmokeTestAsync(output);
+            File.WriteAllText(Path.Combine(output, "result.txt"), startupOnly ? "PASS: packaged WinUI startup and resources.\n" : libraryOnly ? "PASS: library discovery, filtering, image preview, video playback/no autoplay, rename, delete, restore, file watching, empty state.\n" : "PASS: capture regression and content library integration.\n");
             Environment.ExitCode = 0;
         }
         catch (Exception error)

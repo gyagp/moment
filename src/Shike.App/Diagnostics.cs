@@ -2,6 +2,8 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.Runtime.InteropServices.WindowsRuntime;
 using ScreenRecorderLib;
 using Shike.App.Services;
 using Shike.App.Views;
@@ -13,10 +15,38 @@ namespace Shike.App;
 
 public sealed partial class MainWindow
 {
+    internal async Task RunLibraryTestAsync(string output)
+    {
+        // Render only our own visual tree; this does not require desktop focus and
+        // cannot accidentally include another app when the user switches windows.
+        await Task.Delay(600);
+        await RenderUiAsync(output, "ui.png");
+        var file = await StorageFile.GetFileFromPathAsync(Path.Combine(output, "ui.png"));
+        var composition = new Windows.Media.Editing.MediaComposition();
+        composition.Clips.Add(await Windows.Media.Editing.MediaClip.CreateFromImageFileAsync(file, TimeSpan.FromSeconds(3)));
+        var folder = await StorageFolder.GetFolderFromPathAsync(output);
+        var movie = await folder.CreateFileAsync("library-fixture.mp4", CreationCollisionOption.ReplaceExisting);
+        var render = await composition.RenderToFileAsync(movie, Windows.Media.Editing.MediaTrimmingPreference.Precise,
+            Windows.Media.MediaProperties.MediaEncodingProfile.CreateMp4(Windows.Media.MediaProperties.VideoEncodingQuality.Wvga));
+        if (render != Windows.Media.Transcoding.TranscodeFailureReason.None) throw new Exception($"Video fixture rendering failed: {render}");
+        await VerifyLibraryAsync(output, movie.Path);
+    }
+
+    private async Task RenderUiAsync(string output, string name)
+    {
+        var bitmap = new RenderTargetBitmap();
+        await bitmap.RenderAsync((FrameworkElement)Content);
+        var data = (await bitmap.GetPixelsAsync()).ToArray();
+        var frame = new PixelFrame(bitmap.PixelWidth, bitmap.PixelHeight, data);
+        var path = await ImageStore.SaveAsync(frame, output);
+        File.Move(path, Path.Combine(output, name), true);
+    }
+
     /// <summary>Opt-in integration diagnostic. Never runs on ordinary launch.
     /// Captures only this test window's interior, disables both audio sources.</summary>
     internal async Task RunSmokeTestAsync(string output)
     {
+        var originalContent = Content;
         var display = NativeMethods.GetDisplays().First();
         AppWindow.Move(new(display.Bounds.X + 30, display.Bounds.Y + 30));
         ((Microsoft.UI.Windowing.OverlappedPresenter)AppWindow.Presenter).IsAlwaysOnTop = true;
@@ -149,6 +179,63 @@ public sealed partial class MainWindow
         var thumbnailDecoder = await BitmapDecoder.CreateAsync(thumbnail);
         if (thumbnailDecoder.PixelWidth == 0) throw new Exception("MP4 frame decode failed");
         File.WriteAllText(Path.Combine(output, "video-metadata.txt"), $"{properties.Width}x{properties.Height}, {properties.Duration}, {properties.Bitrate} bps\n");
+        Content = originalContent;
+        await VerifyLibraryAsync(output, videoPath);
+    }
+
+    private async Task VerifyLibraryAsync(string output, string videoPath)
+    {
+        var images = _library.Roots[0];
+        var videos = _library.Roots[1];
+        Directory.CreateDirectory(images); Directory.CreateDirectory(videos);
+        var imagePath = Path.Combine(images, "工作记录.png");
+        var moviePath = Path.Combine(videos, "操作演示.mp4");
+        File.Copy(Path.Combine(output, "ui.png"), imagePath, true);
+        File.Copy(videoPath, moviePath, true);
+        File.WriteAllText(Path.Combine(videos, "still.partial.mp4"), "incomplete");
+        await ShowLibraryAsync(imagePath);
+        await LibraryPage.LoadPreviewAsync(LibraryPage.SelectedEntry);
+        if (LibraryPage.VisibleCount != 2 || !LibraryPage.HasImagePreview) throw new Exception("Library did not discover and preview existing captures");
+        await Task.Delay(400);
+        await RenderUiAsync(output, "library.png");
+
+        LibraryPage.SetQuery(LibraryFilter.Videos, "演示");
+        await LibraryPage.LoadPreviewAsync(LibraryPage.SelectedEntry);
+        for (var attempt = 0; attempt < 30 && LibraryPage.PreviewPlayer is null; attempt++) await Task.Delay(100);
+        if (LibraryPage.VisibleCount != 1 || LibraryPage.PreviewPlayer is null)
+            throw new Exception($"Video library filter/player not initialized: rows={LibraryPage.VisibleCount}, selection={LibraryPage.SelectedEntry?.Name}, status={LibraryPage.DiagnosticStatus}");
+        var player = LibraryPage.PreviewPlayer;
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        player.MediaOpened += (_, _) => opened.TrySetResult();
+        if (player.PlaybackSession.NaturalDuration > TimeSpan.Zero) opened.TrySetResult();
+        await opened.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        if (player.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing) throw new Exception("Library video autoplayed");
+        player.Play();
+        await Task.Delay(400);
+        if (player.PlaybackSession.Position <= TimeSpan.Zero) throw new Exception("Embedded video did not play");
+        LibraryPage.Deactivate();
+        var renamed = _library.Rename(moviePath, "录屏重命名"); // verifies the player released its file handle
+        await ShowLibraryAsync(renamed);
+        if (LibraryPage.SelectedEntry?.FullPath != renamed) throw new Exception("Library did not select renamed video");
+        LibraryPage.Deactivate();
+        var deleted = _library.MoveToDeleted(renamed);
+        await LibraryPage.ActivateAsync();
+        LibraryPage.SetQuery(LibraryFilter.Deleted, "");
+        if (LibraryPage.VisibleCount != 1 || LibraryPage.SelectedEntry?.FullPath != deleted) throw new Exception("Recently deleted item not shown");
+        LibraryPage.Deactivate();
+        var restored = _library.Restore(deleted);
+        await ShowLibraryAsync(restored);
+        if (LibraryPage.SelectedEntry?.FullPath != restored) throw new Exception("Restored video not selected");
+        LibraryPage.Deactivate();
+        await ShowLibraryAsync(imagePath);
+        var added = Path.Combine(images, "外部新增.png");
+        File.Copy(imagePath, added, true);
+        for (var attempt = 0; attempt < 15 && LibraryPage.VisibleCount != 3; attempt++) await Task.Delay(200);
+        if (LibraryPage.VisibleCount != 3) throw new Exception("Directory watcher did not refresh new content");
+        LibraryPage.SetQuery(LibraryFilter.All, "不存在的内容");
+        if (LibraryPage.VisibleCount != 0 || LibraryPage.SelectedEntry is not null) throw new Exception("Empty search retained a stale selection");
+        await ShowLibraryAsync(imagePath);
+        await LibraryPage.LoadPreviewAsync(LibraryPage.SelectedEntry);
     }
 
     private async Task VerifyScreenshotModesAsync(string output, DisplayInfo display, PixelFrame ui)

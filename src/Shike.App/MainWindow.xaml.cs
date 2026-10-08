@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media.Imaging;
 using ScreenRecorderLib;
 using Shike.App.Services;
 using Shike.App.Views;
@@ -21,15 +20,18 @@ public sealed partial class MainWindow : Window
     private SessionWindow? _sessionWindow;
     private SelectionWindow? _selectionWindow;
     private bool _paused, _recordingStarted, _closeWhenDone;
-    private string? _resultPath;
+    private readonly CaptureLibrary _library;
     private readonly Stopwatch _elapsed = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    public MainWindow()
+    public MainWindow(CaptureLibrary? library = null)
     {
         InitializeComponent();
+        _library = library ?? new CaptureLibrary(ImageStore.ImageDirectory, ImageStore.VideoDirectory);
+        LibraryPage.Initialize(_library);
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Shike.ico"));
-        AppWindow.Resize(new(1030, 960));
+        var workArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+        AppWindow.Resize(new(Math.Min(1320, workArea.Width - 32), Math.Min(940, workArea.Height - 32)));
         _handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _windowProc = WindowProc;
         NativeMethods.SetWindowSubclass(_handle, _windowProc, 1, 0);
@@ -57,6 +59,7 @@ public sealed partial class MainWindow : Window
         };
         Closed += (_, _) =>
         {
+            LibraryPage.Dispose();
             _timer.Stop();
             foreach (var id in _hotkeys) NativeMethods.UnregisterHotKey(_handle, id);
             NativeMethods.RemoveWindowSubclass(_handle, _windowProc, 1);
@@ -116,7 +119,8 @@ public sealed partial class MainWindow : Window
     }
     private async Task RunAsync(Func<Task> action)
     {
-        if (_mode != CaptureMode.Idle) return;
+        if (_mode != CaptureMode.Idle || LibraryPage.IsBusy) return;
+        LibraryPage.Deactivate();
         SetMode(CaptureMode.Selecting);
         try { await action(); }
         catch (Exception error) { Status("捕获未完成", error.Message, InfoBarSeverity.Error); }
@@ -129,6 +133,7 @@ public sealed partial class MainWindow : Window
             SetMode(CaptureMode.Idle);
             RestoreWindow();
             if (_closeWhenDone) Close();
+            else if (LibraryPage.Visibility == Visibility.Visible && !LibraryPage.IsActive) await LibraryPage.ActivateAsync();
         }
     }
 
@@ -153,7 +158,7 @@ public sealed partial class MainWindow : Window
         SetMode(CaptureMode.Screenshot);
         var frame = selection.Window is { } window ? await WindowCapture.CaptureAsync(window.Handle) : selection.Frame!;
         var path = await ImageStore.SaveAsync(frame);
-        ShowResult(path, true);
+        await ShowLibraryAsync(path);
         var name = selection.Mode switch { ScreenshotMode.Window => "窗口", ScreenshotMode.FullScreen => "全屏", ScreenshotMode.Freeform => "任意形状", _ => "矩形" };
         Status($"{name}截图已保存", $"{frame.Width} × {frame.Height} 像素", InfoBarSeverity.Success);
     }
@@ -200,7 +205,7 @@ public sealed partial class MainWindow : Window
         SetMode(CaptureMode.Finalizing);
         var image = await Task.Run(stitcher.Build);
         var path = await ImageStore.SaveAsync(image);
-        ShowResult(path, true);
+        await ShowLibraryAsync(path);
         Status("长图已保存", $"{image.Width} × {image.Height} 像素。{reason}。请检查拼接结果。", InfoBarSeverity.Success);
     }
 
@@ -230,7 +235,7 @@ public sealed partial class MainWindow : Window
         _timer.Start();
         var path = await _recording.Completion;
         _elapsed.Stop();
-        ShowResult(path, false);
+        await ShowLibraryAsync(path);
         Status("录屏已保存", $"MP4 · {_elapsed.Elapsed:hh\\:mm\\:ss}", InfoBarSeverity.Success);
     }
 
@@ -247,21 +252,24 @@ public sealed partial class MainWindow : Window
             _recording?.Stop();
         }
     }
-    private void ShowResult(string path, bool image)
+    private async Task ShowLibraryAsync(string? path = null)
     {
-        _resultPath = path;
-        EmptyText.Visibility = Visibility.Collapsed;
-        ResultText.Text = path;
-        ResultActions.Visibility = Visibility.Visible;
-        CopyButton.Visibility = image ? Visibility.Visible : Visibility.Collapsed;
-        PreviewImage.Visibility = image ? Visibility.Visible : Visibility.Collapsed;
-        PreviewImage.Source = image ? new BitmapImage(new Uri(path)) { DecodePixelWidth = 900 } : null;
+        CaptureNavigation.IsChecked = false;
+        LibraryNavigation.IsChecked = true;
+        CapturePage.Visibility = Visibility.Collapsed;
+        LibraryPage.Visibility = Visibility.Visible;
+        await LibraryPage.ActivateAsync(path);
     }
-    private static void OpenFolder(string path)
+    private void CaptureNavigation_Click(object sender, RoutedEventArgs e)
     {
-        Directory.CreateDirectory(path);
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        if (LibraryPage.IsBusy) return;
+        LibraryPage.Deactivate();
+        CaptureNavigation.IsChecked = true;
+        LibraryNavigation.IsChecked = false;
+        CapturePage.Visibility = Visibility.Visible;
+        LibraryPage.Visibility = Visibility.Collapsed;
     }
+    private async void LibraryNavigation_Click(object sender, RoutedEventArgs e) => await ShowLibraryAsync();
     private void SafeAction(Action action)
     {
         try { action(); } catch (Exception error) { Status("操作未完成", error.Message, InfoBarSeverity.Error); }
@@ -280,21 +288,5 @@ public sealed partial class MainWindow : Window
             _paused = !_paused;
             PauseButton.Content = _paused ? "继续录制" : "暂停录制";
         });
-    }
-    private void ImageFolder_Click(object sender, RoutedEventArgs e) => SafeAction(() => OpenFolder(ImageStore.ImageDirectory));
-    private void VideoFolder_Click(object sender, RoutedEventArgs e) => SafeAction(() => OpenFolder(ImageStore.VideoDirectory));
-    private void OpenResult_Click(object sender, RoutedEventArgs e) => SafeAction(() =>
-    {
-        if (_resultPath is not null) Process.Start(new ProcessStartInfo(_resultPath) { UseShellExecute = true });
-    });
-    private void RevealResult_Click(object sender, RoutedEventArgs e) => SafeAction(() =>
-    {
-        if (_resultPath is not null) Process.Start(new ProcessStartInfo("explorer.exe") { Arguments = $"/select,\"{_resultPath}\"", UseShellExecute = true });
-    });
-    private async void Copy_Click(object sender, RoutedEventArgs e)
-    {
-        if (_resultPath is null) return;
-        try { await ImageStore.CopyAsync(_resultPath); Status("已复制图片", "可以粘贴到聊天、文档或图片编辑器中。", InfoBarSeverity.Success); }
-        catch (Exception error) { Status("复制未完成", error.Message, InfoBarSeverity.Error); }
     }
 }

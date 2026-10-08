@@ -45,4 +45,5 @@ Check(concave is not null && concave.Value.Frame.Pixels[(20 * 30 + 20) * 4 + 3] 
 Check(CaptureGeometry.CutPolygon(opaque, [new(0, 0), new(10, 10), new(20, 20)]) is null, "Degenerate lasso rejected");
 Check(opaque.IsSimilarTo(opaque), "Stable frame detection");
 Check(!opaque.IsSimilarTo(new(40, 40, new byte[40 * 40 * 4])), "Animation / changed frame detection");
-Console.WriteLine($"PASS: {assertions} assertions (scroll, desktop geometry, rectangle selection, lasso alpha, stable frames).");
+LibraryTests.Run(Check);
+Console.WriteLine($"PASS: {assertions} assertions (capture geometry, scrolling, content discovery/filtering, safe rename/delete/restore).");

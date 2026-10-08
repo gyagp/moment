@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')]
-    [string]$Version = '0.1.1',
+    [string]$Version = '0.1.2',
     [string]$Dotnet = 'dotnet',
     [string]$NuGetConfig = ''
 )
@@ -17,7 +17,7 @@ $arguments = @('publish', "$root/src/Shike.App/Shike.App.csproj", '-c', 'Release
 if ($NuGetConfig) { $arguments += "-p:RestoreConfigFile=$NuGetConfig" }
 & $Dotnet @arguments
 if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
-foreach ($required in @('Shike.exe', 'Shike.pri', 'App.xbf', 'MainWindow.xbf', 'ScreenRecorderLib.dll', 'Assets/Shike.ico')) {
+foreach ($required in @('Shike.exe', 'Shike.pri', 'App.xbf', 'MainWindow.xbf', 'Views/LibraryView.xbf', 'ScreenRecorderLib.dll', 'Assets/Shike.ico')) {
     if (!(Test-Path -LiteralPath (Join-Path $publish $required))) { throw "Publish output is missing $required" }
 }
 
