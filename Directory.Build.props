@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <Version>0.1.0</Version>
+    <Authors>Shike contributors</Authors>
+    <RepositoryUrl>https://github.com/gyagp/shike</RepositoryUrl>
+  </PropertyGroup>
+</Project>

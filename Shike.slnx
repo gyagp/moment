@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Shike.App/Shike.App.csproj" />
+    <Project Path="src/Shike.Core/Shike.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Shike.Core.Tests/Shike.Core.Tests.csproj" />
+  </Folder>
+</Solution>
