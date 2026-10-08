@@ -132,12 +132,14 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<Selection?> SelectAsync(DisplayInfo display)
+    private async Task<Selection?> SelectAsync(DisplayInfo display, bool screenshotModes = false)
     {
         AppWindow.Hide();
         await Task.Delay(250);
-        var frame = await Task.Run(() => NativeMethods.Capture(display.Bounds));
-        _selectionWindow = new(display, frame);
+        var bounds = screenshotModes ? CaptureRect.Union(NativeMethods.GetDisplays().Select(d => d.Bounds)) : display.Bounds;
+        var frame = await Task.Run(() => NativeMethods.Capture(bounds));
+        var windows = screenshotModes ? NativeMethods.GetCaptureWindows(_handle) : null;
+        _selectionWindow = new(bounds, frame, display, windows, screenshotModes);
         _selectionWindow.Activate();
         var selection = await _selectionWindow.Result;
         _selectionWindow = null;
@@ -146,12 +148,14 @@ public sealed partial class MainWindow : Window
     }
     private async Task CaptureScreenshotAsync()
     {
-        var selection = await SelectAsync(SelectedDisplay);
+        var selection = await SelectAsync(SelectedDisplay, screenshotModes: true);
         if (selection is null) return;
         SetMode(CaptureMode.Screenshot);
-        var path = await ImageStore.SaveAsync(selection.Frame);
+        var frame = selection.Window is { } window ? await WindowCapture.CaptureAsync(window.Handle) : selection.Frame!;
+        var path = await ImageStore.SaveAsync(frame);
         ShowResult(path, true);
-        Status("截图已保存", $"{selection.Frame.Width} × {selection.Frame.Height} 像素", InfoBarSeverity.Success);
+        var name = selection.Mode switch { ScreenshotMode.Window => "窗口", ScreenshotMode.FullScreen => "全屏", ScreenshotMode.Freeform => "任意形状", _ => "矩形" };
+        Status($"{name}截图已保存", $"{frame.Width} × {frame.Height} 像素", InfoBarSeverity.Success);
     }
 
     private async Task CaptureScrollAsync()
@@ -159,35 +163,45 @@ public sealed partial class MainWindow : Window
         var display = SelectedDisplay;
         var selection = await SelectAsync(display);
         if (selection is null) return;
+        await Task.Delay(250); // let the selection overlay leave the desktop before hit testing
+        using var driver = new AutoScrollDriver(selection.Region);
         SetMode(CaptureMode.Scrolling);
         _scrollCancellation = new();
         var token = _scrollCancellation.Token;
         var stitcher = new ScrollStitcher();
-        if (stitcher.Add(selection.Frame).Status == StitchStatus.LimitReached)
-            throw new InvalidOperationException("所选区域过大，请选择较小的区域。");
-        _sessionWindow = new(display, "缓慢向下滚动，每次停留片刻。\n请保持窗口位置不变。", StopActive);
+        _sessionWindow = new(display, "正在准备自动滚动…\n你只需点击停止。", StopActive, avoid: selection.Region);
         _sessionWindow.Activate();
-        Status("滚动截图中", "缓慢向下滚动，点击浮动条中的“结束并保存”或按 Ctrl + Shift + F。不要移动目标窗口。");
-        while (!token.IsCancellationRequested)
+        Status("自动滚动截图中", "正在自动滚动和拼接，点击停止或按 Ctrl + Shift + F 保存。请保持目标窗口和鼠标位置不变。");
+        var reason = "已停止";
+        var unchanged = 0;
+        try
         {
-            try { await Task.Delay(800, token); } catch (OperationCanceledException) { break; }
-            var frame = await Task.Run(() => NativeMethods.Capture(selection.Region));
-            if (token.IsCancellationRequested) break;
-            var result = await Task.Run(() => stitcher.Add(frame));
-            var hint = result.Status switch
+            await driver.PrepareAsync(token);
+            var baseline = await driver.ReadStableFrameAsync(token)
+                ?? throw new InvalidOperationException("画面持续变化，请关闭动画或选择稳定的内容区域。");
+            if (stitcher.Add(baseline).Status == StitchStatus.LimitReached)
+                throw new InvalidOperationException("所选区域过大，请选择较小的区域。");
+            while (!token.IsCancellationRequested)
             {
-                StitchStatus.NoMatch => "未匹配：请向上回退少许，再缓慢向下滚动。",
-                StitchStatus.LimitReached => "已达到长图大小上限，正在保存。",
-                _ => "缓慢向下滚动，每次停留片刻。"
-            };
-            _sessionWindow.SetStatus($"长图高度 {result.TotalHeight:N0} px\n{hint}");
-            if (result.Status == StitchStatus.LimitReached) break;
+                driver.Step(token);
+                var frame = await driver.ReadStableFrameAsync(token);
+                if (frame is null) { reason = "画面未稳定，已停止"; break; }
+                var result = await Task.Run(() => stitcher.Add(frame), token);
+                unchanged = result.Status == StitchStatus.Unchanged ? unchanged + 1 : 0;
+                _sessionWindow.SetStatus($"自动滚动中 · 长图高度 {result.TotalHeight:N0} px\n点击停止即可保存。");
+                if (unchanged >= 3) { reason = "已到达底部或页面无法继续滚动"; break; }
+                if (result.Status == StitchStatus.NoMatch) { reason = "无法可靠拼接，已停止；请检查固定元素或页面跳动"; break; }
+                if (result.Status == StitchStatus.LimitReached) { reason = "已达到长图大小上限"; break; }
+            }
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception error) when (stitcher.Height > 0) { reason = error.Message; }
+        if (stitcher.Height == 0) { Status("已取消", "没有保存文件。"); return; }
         SetMode(CaptureMode.Finalizing);
         var image = await Task.Run(stitcher.Build);
         var path = await ImageStore.SaveAsync(image);
         ShowResult(path, true);
-        Status("长图已保存", $"{image.Width} × {image.Height} 像素。滚动截图为实验功能，请检查拼接结果。", InfoBarSeverity.Success);
+        Status("长图已保存", $"{image.Width} × {image.Height} 像素。{reason}。请检查拼接结果。", InfoBarSeverity.Success);
     }
 
     private async Task RecordAsync()

@@ -26,7 +26,7 @@ public partial class App : Application
             _window = main;
             main.Activate();
             if (startupOnly) await Task.Delay(500); else await main.RunSmokeTestAsync(output);
-            File.WriteAllText(Path.Combine(output, "result.txt"), startupOnly ? "PASS: packaged WinUI startup and resources.\n" : "PASS: WinUI launch, PNG capture/decode, rendered scroll stitching, MP4 record/pause/resume/finalize/metadata/frame decode.\n");
+            File.WriteAllText(Path.Combine(output, "result.txt"), startupOnly ? "PASS: packaged WinUI startup and resources.\n" : "PASS: WinUI launch; rectangle/fullscreen/freeform/window modes; cancellation; transparent PNG; occlusion-free HWND capture; automatic wheel scrolling/stitching/bottom detection/cancellation; MP4 pause/resume/finalize/frame decode.\n");
             Environment.ExitCode = 0;
         }
         catch (Exception error)

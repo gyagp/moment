@@ -1,14 +1,16 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using Shike.Core;
 
 namespace Shike.App.Services;
 
-public readonly record struct CaptureRect(int X, int Y, int Width, int Height);
 public sealed record DisplayInfo(string DeviceName, CaptureRect Bounds, bool IsPrimary)
 {
     public string Label => $"{(IsPrimary ? "主显示器" : "显示器")} · {Bounds.Width} × {Bounds.Height} ({DeviceName})";
 }
+
+internal sealed record CaptureWindow(nint Handle, string Title, CaptureRect Bounds);
 
 internal static class NativeMethods
 {
@@ -35,6 +37,31 @@ internal static class NativeMethods
         public uint Used, Important;
     }
     private delegate bool MonitorEnum(nint monitor, nint dc, ref Rect bounds, nint data);
+    private delegate bool WindowEnum(nint window, nint data);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(WindowEnum callback, nint data);
+    [DllImport("user32.dll")] internal static extern bool IsWindow(nint window);
+    [DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint window);
+    [DllImport("user32.dll")] internal static extern bool IsIconic(nint window);
+    [DllImport("user32.dll")] internal static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);
+    [DllImport("user32.dll")] internal static extern nint GetAncestor(nint window, uint flags);
+    [DllImport("user32.dll")] internal static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] internal static extern bool GetCursorPos(out Point point);
+    [StructLayout(LayoutKind.Sequential)] private struct MouseInput
+    {
+        public int X, Y;
+        public uint Data, Flags, Time;
+        public nint ExtraInfo;
+    }
+    [StructLayout(LayoutKind.Explicit)] private struct InputUnion { [FieldOffset(0)] public MouseInput Mouse; }
+    [StructLayout(LayoutKind.Sequential)] private struct Input { public uint Type; public InputUnion Data; }
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(nint window, out Rect rect);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint window, StringBuilder text, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint window, StringBuilder text, int count);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint window, int index);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] private static extern int GetFrameBounds(nint window, uint attribute, out Rect value, int size);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] private static extern int GetCloaked(nint window, uint attribute, out int value, int size);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(nint dc, nint clip, MonitorEnum callback, nint data);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
     [DllImport("user32.dll")] private static extern nint GetDC(nint window);
@@ -67,6 +94,36 @@ internal static class NativeMethods
             return true;
         }, 0);
         return result.OrderByDescending(d => d.IsPrimary).ToList();
+    }
+
+    // EnumWindows returns top-level windows in front-to-back Z order. Snapshot before
+    // creating the overlay so its own HWND can never intercept window hit testing.
+    internal static List<CaptureWindow> GetCaptureWindows(params nint[] excludedHandles)
+    {
+        var result = new List<CaptureWindow>();
+        EnumWindows((window, _) =>
+        {
+            if (excludedHandles.Contains(window) || !IsWindowVisible(window) || IsIconic(window)) return true;
+            if ((GetWindowLongPtr(window, -20).ToInt64() & 0x80) != 0) return true; // tool windows
+            if (GetCloaked(window, 14, out var cloaked, sizeof(int)) == 0 && cloaked != 0) return true;
+            var title = new StringBuilder(512);
+            var className = new StringBuilder(256);
+            if (GetWindowText(window, title, title.Capacity) == 0) return true;
+            GetClassName(window, className, className.Capacity);
+            if (className.ToString() is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return true;
+            if (GetFrameBounds(window, 9, out var rect, Marshal.SizeOf<Rect>()) != 0 && !GetWindowRect(window, out rect)) return true;
+            if (rect.Right - rect.Left < 8 || rect.Bottom - rect.Top < 8) return true;
+            result.Add(new(window, title.ToString(), new(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top)));
+            return true;
+        }, 0);
+        return result;
+    }
+
+    internal static void ScrollDown()
+    {
+        var input = new Input { Data = new InputUnion { Mouse = new MouseInput { Data = unchecked((uint)-120), Flags = 0x0800 } } };
+        if (SendInput(1, [input], Marshal.SizeOf<Input>()) != 1)
+            throw new InvalidOperationException("无法滚动目标窗口；请确认目标程序没有以更高权限运行。");
     }
 
     internal static PixelFrame Capture(CaptureRect region)

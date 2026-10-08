@@ -28,4 +28,19 @@ public sealed record PixelFrame
             Buffer.BlockCopy(Pixels, (y + row) * Stride + x * 4, pixels, row * width * 4, width * 4);
         return new(width, height, pixels);
     }
+
+    public bool IsSimilarTo(PixelFrame other, double tolerance = 0.65)
+    {
+        if (Width != other.Width || Height != other.Height) return false;
+        long difference = 0;
+        var samples = 0;
+        for (var y = 0; y < Height; y += Math.Max(1, Height / 100))
+            for (var x = 0; x < Width; x += Math.Max(1, Width / 100))
+            {
+                var index = y * Stride + x * 4;
+                for (var c = 0; c < 3; c++) difference += Math.Abs(Pixels[index + c] - other.Pixels[index + c]);
+                samples += 3;
+            }
+        return (double)difference / samples <= tolerance;
+    }
 }

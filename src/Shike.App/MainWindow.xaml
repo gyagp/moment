@@ -17,7 +17,7 @@
           </StackPanel>
           <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                   BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="12,5">
-            <TextBlock Text="0.1 · 预览版" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock Text="0.1.1" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
           </Border>
         </Grid>
 
@@ -31,17 +31,17 @@
           <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
             <StackPanel Spacing="12">
               <FontIcon Glyph="&#xE722;" HorizontalAlignment="Left" FontSize="28" Foreground="#15998B" />
-              <TextBlock Text="区域截图" FontSize="20" FontWeight="SemiBold" />
-              <TextBlock Text="框选屏幕内容，保存为 PNG。" FontSize="13" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" MinHeight="38" />
-              <Button x:Name="ScreenshotButton" Content="截取区域" Click="Screenshot_Click" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" />
+              <TextBlock Text="屏幕截图" FontSize="20" FontWeight="SemiBold" />
+              <TextBlock Text="矩形、窗口、全屏或任意形状。" FontSize="13" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" MinHeight="38" />
+              <Button x:Name="ScreenshotButton" Content="新建截图" Click="Screenshot_Click" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" />
               <TextBlock Text="Ctrl + Shift + S" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
           </Border>
           <Border Grid.Column="1" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
             <StackPanel Spacing="12">
-              <SymbolIcon Symbol="Page" HorizontalAlignment="Left" Foreground="#15998B" />
+              <SymbolIcon Symbol="Page" Width="28" Height="28" HorizontalAlignment="Left" Foreground="#15998B" />
               <TextBlock Text="滚动截图" FontSize="20" FontWeight="SemiBold" />
-              <TextBlock Text="手动向下滚动，自动拼接长图。" FontSize="13" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" MinHeight="38" />
+              <TextBlock Text="自动滚动并拼接，你只需停止。" FontSize="13" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" MinHeight="38" />
               <Button x:Name="ScrollButton" Content="截取长图 · 实验" Click="Scroll_Click" HorizontalAlignment="Stretch" />
               <TextBlock Text="Ctrl + Shift + L" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
@@ -61,7 +61,7 @@
           <StackPanel Spacing="12">
             <Grid ColumnSpacing="16">
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-              <TextBlock Text="捕获显示器" VerticalAlignment="Center" />
+              <TextBlock Text="长截图 / 录屏显示器" VerticalAlignment="Center" />
               <ComboBox x:Name="DisplayPicker" Grid.Column="1" DisplayMemberPath="Label" HorizontalAlignment="Stretch" AutomationProperties.Name="捕获显示器" />
               <Button x:Name="RefreshButton" Grid.Column="2" Content="刷新" Click="Refresh_Click" />
             </Grid>
@@ -74,7 +74,7 @@
         </Border>
 
         <InfoBar x:Name="StatusBar" IsOpen="True" IsClosable="False" Severity="Informational" Title="准备就绪"
-                 Message="滚动截图时，请只框选滚动内容，缓慢向下滚动并短暂停留。Ctrl + Shift + F 结束捕获。" />
+                 Message="新建截图后选择矩形、窗口、全屏或任意形状。滚动截图会自动滚动，Ctrl + Shift + F 停止并保存。" />
         <StackPanel x:Name="SessionControls" Orientation="Horizontal" Spacing="10" Visibility="Collapsed">
           <Button x:Name="PauseButton" Content="暂停录制" Click="Pause_Click" />
           <Button x:Name="StopButton" Content="结束并保存" Click="Stop_Click" Style="{StaticResource AccentButtonStyle}" />

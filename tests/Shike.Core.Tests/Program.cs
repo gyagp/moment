@@ -29,4 +29,20 @@ Check(tooTall.Add(new(1, ScrollStitcher.MaxHeight + 1, new byte[(ScrollStitcher.
 var badSize = false;
 try { _ = new PixelFrame(10, 10, new byte[3]); } catch (ArgumentException) { badSize = true; }
 Check(badSize, "Invalid image buffer rejected");
-Console.WriteLine($"PASS: {assertions} assertions (scroll reconstruction, rejection, bounds).");
+var desktop = PixelRect.Union([new(-1920, -200, 1920, 1080), new(0, 0, 2560, 1440)]);
+Check(desktop == new PixelRect(-1920, -200, 4480, 1640), "Virtual desktop with negative monitor coordinates");
+Check(CaptureGeometry.FromDrag(new(98.5, 85.5), new(10.25, 4.25), 100, 100) == new PixelRect(10, 4, 89, 82), "Reverse drag and fractional DPI rounding");
+Check(CaptureGeometry.FromDrag(new(-15, -2), new(120, 130), 100, 100) == new PixelRect(0, 0, 100, 100), "Clamp selection at desktop edges");
+Check(new PixelRect(-20, -10, 40, 30).Intersect(new(0, 0, 100, 100)) == new PixelRect(0, 0, 20, 20), "Clip partially offscreen window outline");
+Check(!new PixelRect(0, 0, 10, 10).Contains(new(10, 5)), "Shared edge belongs to adjacent window");
+var opaque = new PixelFrame(40, 40, Enumerable.Repeat((byte)255, 40 * 40 * 4).ToArray());
+var polygon = CaptureGeometry.CutPolygon(opaque, [new(5, 5), new(35, 5), new(5, 35)]);
+Check(polygon is not null && polygon.Value.Bounds == new PixelRect(5, 5, 30, 30), "Freeform output bounds");
+Check(polygon!.Value.Frame.Pixels[3] == 255, "Freeform interior preserves pixels");
+Check(polygon.Value.Frame.Pixels[(29 * 30 + 29) * 4 + 3] == 0, "Freeform exterior is transparent");
+var concave = CaptureGeometry.CutPolygon(opaque, [new(0, 0), new(30, 0), new(30, 10), new(10, 10), new(10, 30), new(0, 30)]);
+Check(concave is not null && concave.Value.Frame.Pixels[(20 * 30 + 20) * 4 + 3] == 0, "Concave lasso cutout");
+Check(CaptureGeometry.CutPolygon(opaque, [new(0, 0), new(10, 10), new(20, 20)]) is null, "Degenerate lasso rejected");
+Check(opaque.IsSimilarTo(opaque), "Stable frame detection");
+Check(!opaque.IsSimilarTo(new(40, 40, new byte[40 * 40 * 4])), "Animation / changed frame detection");
+Console.WriteLine($"PASS: {assertions} assertions (scroll, desktop geometry, rectangle selection, lasso alpha, stable frames).");

@@ -26,7 +26,7 @@ internal static class ImageStore
         {
             using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight,
                 (uint)frame.Width, (uint)frame.Height, 96, 96, frame.Pixels);
             await encoder.FlushAsync();
         }

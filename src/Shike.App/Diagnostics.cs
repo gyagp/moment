@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using ScreenRecorderLib;
 using Shike.App.Services;
+using Shike.App.Views;
 using Shike.Core;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -29,6 +30,7 @@ public sealed partial class MainWindow
         var ui = NativeMethods.Capture(new(pos.X, pos.Y, size.Width, size.Height));
         var uiPath = await ImageStore.SaveAsync(ui, output);
         File.Move(uiPath, Path.Combine(output, "ui.png"), true);
+        await VerifyScreenshotModesAsync(output, display, ui);
 
         var lines = new StackPanel();
         var random = new Random(7412);
@@ -65,6 +67,49 @@ public sealed partial class MainWindow
         {
             var decoder = await BitmapDecoder.CreateAsync(stream);
             if (decoder.PixelWidth != image.Width || decoder.PixelHeight != image.Height) throw new Exception("PNG dimensions mismatch");
+        }
+
+        // Exercise real wheel input through the same driver used by automatic long capture.
+        scroll.ChangeView(null, 0, null, true);
+        Activate();
+        NativeMethods.SetForegroundWindow(_handle);
+        await Task.Delay(300);
+        using (var automatic = new AutoScrollDriver(region))
+        {
+            await automatic.PrepareAsync(CancellationToken.None);
+            var first = await automatic.ReadStableFrameAsync(CancellationToken.None) ?? throw new Exception("Auto scroll baseline not stable");
+            var autoStitcher = new ScrollStitcher();
+            autoStitcher.Add(first);
+            for (var step = 0; step < 3; step++)
+            {
+                automatic.Step(CancellationToken.None);
+                var next = await automatic.ReadStableFrameAsync(CancellationToken.None) ?? throw new Exception("Auto scroll frame not stable");
+                if (autoStitcher.Add(next).Status != StitchStatus.Added) throw new Exception("Automatic wheel scroll did not stitch");
+            }
+            if (scroll.VerticalOffset <= 0 || autoStitcher.Height <= first.Height) throw new Exception("Automatic scrolling did not move content");
+            await ImageStore.SaveAsync(autoStitcher.Build(), output);
+            scroll.ChangeView(null, scroll.ScrollableHeight, null, true);
+            await Task.Delay(300);
+            var end = await automatic.ReadStableFrameAsync(CancellationToken.None) ?? throw new Exception("End of page not stable");
+            automatic.Step(CancellationToken.None);
+            var afterEnd = await automatic.ReadStableFrameAsync(CancellationToken.None) ?? throw new Exception("End of page not stable after wheel");
+            if (!end.IsSimilarTo(afterEnd)) throw new Exception("Bottom-of-page frame changed unexpectedly");
+            using var stopped = new CancellationTokenSource();
+            stopped.Cancel();
+            var canceled = false;
+            try { automatic.Step(stopped.Token); } catch (OperationCanceledException) { canceled = true; }
+            if (!canceled) throw new Exception("Canceled auto-scroll accepted input");
+            var focusWindow = new Window { Title = "时刻 · 焦点变化测试", Content = new TextBlock { Text = "自动滚动必须停止" } };
+            try
+            {
+                focusWindow.Activate();
+                NativeMethods.SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(focusWindow));
+                await Task.Delay(100);
+                var rejected = false;
+                try { automatic.Step(CancellationToken.None); } catch (InvalidOperationException) { rejected = true; }
+                if (!rejected) throw new Exception("Auto scroll injected input after focus changed");
+            }
+            finally { focusWindow.Close(); Activate(); NativeMethods.SetForegroundWindow(_handle); }
         }
         using var recording = new RecordingSession();
         var began = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -104,5 +149,79 @@ public sealed partial class MainWindow
         var thumbnailDecoder = await BitmapDecoder.CreateAsync(thumbnail);
         if (thumbnailDecoder.PixelWidth == 0) throw new Exception("MP4 frame decode failed");
         File.WriteAllText(Path.Combine(output, "video-metadata.txt"), $"{properties.Width}x{properties.Height}, {properties.Duration}, {properties.Bitrate} bps\n");
+    }
+
+    private async Task VerifyScreenshotModesAsync(string output, DisplayInfo display, PixelFrame ui)
+    {
+        var bounds = new CaptureRect(AppWindow.Position.X, AppWindow.Position.Y, ui.Width, ui.Height);
+        var toolbarDisplay = display with { Bounds = bounds };
+        var windows = NativeMethods.GetCaptureWindows();
+        if (!windows.Any(w => w.Handle == _handle)) throw new Exception("Native enumeration did not find test window");
+        SelectionWindow Create() => new(bounds, ui, toolbarDisplay, windows, allowModes: true);
+
+        var rectangle = Create();
+        rectangle.Activate();
+        await Task.Delay(150);
+        rectangle.BeginSelection(new(330, 310));
+        rectangle.MoveSelection(new(30, 110));
+        await Task.Delay(150);
+        var toolbarImage = await ImageStore.SaveAsync(NativeMethods.Capture(bounds), output);
+        File.Move(toolbarImage, Path.Combine(output, "selection-toolbar.png"), true);
+        rectangle.EndSelection(new(30, 110));
+        var crop = await rectangle.Result;
+        if (crop?.Region != new CaptureRect(bounds.X + 30, bounds.Y + 110, 300, 200) ||
+            crop.Frame is null || !crop.Frame.Pixels.SequenceEqual(ui.Crop(30, 110, 300, 200).Pixels))
+            throw new Exception("Rectangle mode did not return the exact selected pixels");
+
+        var full = Create();
+        full.SetMode(ScreenshotMode.FullScreen);
+        var all = await full.Result;
+        if (all?.Region != bounds || !ReferenceEquals(all.Frame, ui)) throw new Exception("Full screen mode did not return entire desktop frame");
+
+        var lasso = Create();
+        lasso.SetMode(ScreenshotMode.Freeform);
+        lasso.BeginSelection(new(20, 110));
+        lasso.MoveSelection(new(220, 110));
+        lasso.EndSelection(new(20, 310));
+        var free = await lasso.Result;
+        if (free?.Frame is not { } cut || cut.Pixels[^1] != 0) throw new Exception("Freeform mode lost transparency");
+        var freePath = await ImageStore.SaveAsync(cut, output);
+        using (var stream = await (await StorageFile.GetFileFromPathAsync(freePath)).OpenReadAsync())
+        {
+            var decoder = await BitmapDecoder.CreateAsync(stream);
+            var pixels = await decoder.GetPixelDataAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight, new BitmapTransform(), ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
+            if (pixels.DetachPixelData()[^1] != 0) throw new Exception("PNG encoder discarded freeform alpha");
+        }
+
+        var canceled = Create();
+        canceled.Cancel();
+        if (await canceled.Result is not null) throw new Exception("Canceled screenshot produced output");
+
+        var windowSelection = Create();
+        windowSelection.SetMode(ScreenshotMode.Window);
+        windowSelection.BeginSelection(new(300, 250));
+        var selected = await windowSelection.Result;
+        if (selected?.Window?.Handle != _handle) throw new Exception("Window hit test selected the wrong HWND");
+
+        // A real overlapping window must not appear in an HWND screenshot.
+        var blocker = new Window { Title = "时刻 · 窗口截图遮挡测试", Content = new Grid { Background = new SolidColorBrush(Colors.Magenta) } };
+        try
+        {
+            blocker.AppWindow.MoveAndResize(new(bounds.X + 100, bounds.Y + 160, 420, 280));
+            ((Microsoft.UI.Windowing.OverlappedPresenter)blocker.AppWindow.Presenter).IsAlwaysOnTop = true;
+            blocker.Activate();
+            await Task.Delay(300);
+            var windowImage = await WindowCapture.CaptureAsync(_handle);
+            if (windowImage.Width < 100 || windowImage.Height < 100) throw new Exception("Window capture is empty");
+            var magentaPixels = 0;
+            for (var i = 0; i < windowImage.Pixels.Length; i += 4)
+                if (windowImage.Pixels[i] > 245 && windowImage.Pixels[i + 1] < 10 && windowImage.Pixels[i + 2] > 245) magentaPixels++;
+            if (magentaPixels > 100) throw new Exception("Window screenshot included the occluding window");
+            await ImageStore.SaveAsync(windowImage, output);
+            NativeMethods.ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(blocker), 6);
+            if (NativeMethods.GetCaptureWindows().Any(w => w.Handle == WinRT.Interop.WindowNative.GetWindowHandle(blocker)))
+                throw new Exception("Minimized windows must not be selectable");
+        }
+        finally { blocker.Close(); Activate(); NativeMethods.SetForegroundWindow(_handle); }
     }
 }
